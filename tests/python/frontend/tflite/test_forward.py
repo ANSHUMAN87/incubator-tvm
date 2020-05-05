@@ -344,6 +344,44 @@ def test_forward_gather():
         _test_gather((1, 3, 3), [20, 20], 2, 'float32', quantized, oob=True)
 
 #######################################################################
+# Gather_nd
+# ------
+def _test_gather_nd(dshape, indices, dtype, quantized=False, oob=False):
+    """ One iteration of Gather_nd """
+    indices = np.asarray(indices).astype('int32')
+    data = np.random.uniform(1, 10, size=dshape)
+    data = data.astype(np.uint8) if quantized else data.astype(dtype)
+    with tf.Graph().as_default():
+        in_data = array_ops.placeholder(shape=data.shape, dtype=data.dtype, name="in_data")
+        out = array_ops.gather_nd(in_data, indices)
+        input_range = {'in_data': (-100, 100)} if quantized else None
+        try:
+            compare_tflite_with_tvm([data], ['in_data:0'], [in_data], [out],
+                                      quantized=quantized, input_range=input_range)
+        except ValueError as e:
+            if not oob:
+                raise e
+        except Exception as e:
+            raise e
+
+def test_forward_gather_nd():
+    """test operator GatherNd"""
+    tf.reset_default_graph()
+    # NOTE: Currently TFLite Converter does not support quantized Gather_ND
+    for quantized in [False]:
+        _test_gather_nd((2, 2), [[0, 0], [1, 1]], 'float32', quantized)
+        _test_gather_nd((2, 2, 2), [[1, 0, 0], [0, 0, 0]], 'float32', quantized)
+        _test_gather_nd((2, 2), [[[1, 0], [0, 1]]], 'int32', quantized)
+        _test_gather_nd((2, 2), [[[1, 0], [0, 1]]], 'float32', quantized)
+        _test_gather_nd((3, 3, 3),  [[[1, 0]]], 'int32', quantized)
+        _test_gather_nd((3, 3, 3), [[[1, 0]]], 'int32', quantized)
+        _test_gather_nd((4, 3, 5, 6),  [[2, 1, 0, 0]], 'float32', quantized)
+        _test_gather_nd((3, 3, 3), [[[2, 1]]], 'int32', quantized)
+        _test_gather_nd((2, 2), [[0, 0], [3, 3]], 'float32', quantized, oob=True)
+        _test_gather_nd((3, 3, 3), [[[3, 3]]], 'int32', quantized, oob=True)
+        _test_gather_nd((4, 3, 5, 6),  [[3, 9, 0, 0]], 'float32', quantized, oob=True)
+
+#######################################################################
 # StridedSlice
 # ------------
 
@@ -1994,6 +2032,7 @@ if __name__ == '__main__':
     test_forward_slice()
     test_forward_topk()
     test_forward_gather()
+    test_forward_gather_nd()
     test_forward_stridedslice()
     test_forward_depthtospace()
     test_forward_spacetodepth()
