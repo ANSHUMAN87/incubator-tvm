@@ -84,6 +84,7 @@ class OperatorConverter(object):
             'FLOOR': self.convert_floor,
             'FULLY_CONNECTED': self.convert_fully_connected,
             'GATHER': self.convert_gather,
+            'GATHER_ND': self.convert_gather_nd,
             'GREATER_EQUAL': self.convert_greater_equal,
             'GREATER': self.convert_greater,
             'HARD_SWISH': self.convert_hard_swish,
@@ -1065,6 +1066,61 @@ class OperatorConverter(object):
 
         # Use mode 'fast' since indices are already checked within bounds.
         out = _op.take(data, indices, axis=axis, mode="fast")
+        return out
+
+    def convert_gather_nd(self, op):
+        """Method to Convert TFLite GATHER_ND operator"""
+        try:
+            from tflite.TensorType import TensorType
+        except ImportError:
+            raise ImportError("The tflite package must be installed")
+
+        input_tensors = self.get_input_tensors(op)
+        assert len(input_tensors) == 2, "input tensors length should be 2"
+
+        indices = input_tensors[1]
+        indices_type = indices.tensor.Type()
+        assert indices_type in (TensorType.INT32, TensorType.INT64)
+        indices_type_str = self.get_tensor_type_str(indices_type)
+        indices = self.exp_tab.new_const(self.get_tensor_value(indices),
+                                         dtype=indices_type_str)
+
+        # Check the indices are within bounds.
+        param = self.get_expr(input_tensors[0].tensor_idx)
+        param_shape = list(input_tensors[0].tensor.ShapeAsNumpy())
+        params_rank = len(param_shape)
+
+        indices_shape = list(input_tensors[1].tensor.ShapeAsNumpy())
+        indices_rank = len(indices_shape)
+        indices_nd = indices_shape[indices_rank - 1]
+        indices_val = self.get_tensor_value(input_tensors[1])
+        indices_len = len(indices_shape)
+
+        assert params_rank >= 1, "Params must be at least a vector"
+        assert indices_rank >= 1, "Indices must be at least a vector"
+        assert indices_nd <= params_rank, "Index innermost dimension length must be <= params rank"
+
+        out_shape = []
+        output_rank = indices_rank + params_rank - indices_nd - 1;
+        for i in range(indices_rank - 1):
+            out_shape.append(indices_shape[i])
+        for i in range(indices_nd, params_rank):
+            out_shape.append(param_shape[i])
+
+        assert output_rank == len(out_shape)
+
+        loopover = [range(s) for s in out_shape]
+        for idx in list(itertools.product(*loopover)):
+            indices_position = [idx[j] for j in range(0, indices_len - 1)]
+            real_indices = []
+            real_indices.extend(indices_val[tuple(indices_position)])
+            real_indices.extend([idx[j] for j in range(indices_len - 1, len(idx))])
+            for r, d in zip(real_indices, param_shape):
+                if r >= d:
+                    raise ValueError("TFLite out of bound indices are not supported.")
+
+        indices = _op.transpose(indices, axes=[-1] + list(range(indices_len-1)))
+        out = _op.gather_nd(param, indices)
         return out
 
     def convert_strided_slice(self, op):
